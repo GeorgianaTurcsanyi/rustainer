@@ -1,17 +1,13 @@
-use libc::c_int;
-use nix::libc;
-use nix::sched::clone;
-use nix::sys::signal::Signal::{SIGCHLD, SIGHUP};
+use nix::sched::{CloneFlags, clone};
 use nix::sys::wait::wait;
 use nix::unistd::ForkResult::{Child, Parent};
 use nix::unistd::{fork, getpid, getppid};
-use std::env::args;
 use std::process::{Command, exit};
 
-const STACK_SIZE: usize = 10 * 1024 * 1024; // 10mb
-
-
 fn run() -> isize {
+    nix::sched::unshare(CloneFlags::CLONE_NEWUTS)
+        .map_err(|e| format!("unshare failed: {}", e))
+        .unwrap();
     let _ = Command::new("/bin/bash")
         .args(["-i"])
         .spawn()
@@ -22,40 +18,25 @@ fn run() -> isize {
 }
 
 fn main() {
-    // This yells illegal instruction
-    unsafe {
-        let stack: &mut [u8; STACK_SIZE] = &mut [0; STACK_SIZE];
-        let signal: Option<c_int> = Some(SIGCHLD as c_int);
+    let pid = unsafe { fork() };
 
-        let child_callback: nix::sched::CloneCb = Box::new(run);
+    match pid.expect("Fork Failed: Unable to create child process!") {
+        Child => {
+            println!(
+                "Hello from child process with pid: {} and parent pid:{}",
+                getpid(),
+                getppid()
+            );
+            run();
+        }
 
-        let _ = clone(
-            child_callback,
-            stack,
-            nix::sched::CloneFlags::CLONE_NEWUTS,
-            signal,
-        )
-        .expect("should be able to run");
-
-        // nix::sys::wait::waitpid(cp, None).expect("cannot wait");
+        Parent { child } => {
+            wait();
+            println!(
+                "Hello from parent process with pid: {} and child pid:{}",
+                getpid(),
+                child
+            );
+        }
     }
-
-    // This works, but, as expected, no isolation
-    // let pid = unsafe { fork() };
-    //
-    // match pid.expect("Fork Failed: Unable to create child process!") {
-    //     Child => println!(
-    //         "Hello from child process with pid: {} and parent pid:{}",
-    //         getpid(),
-    //         getppid()
-    //     ),
-    //     Parent { child } => {
-    //         wait();
-    //         println!(
-    //             "Hello from parent process with pid: {} and child pid:{}",
-    //             getpid(),
-    //             child
-    //         );
-    //     }
-    // }
 }
